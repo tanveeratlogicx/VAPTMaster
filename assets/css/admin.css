@@ -1,0 +1,80 @@
+.vaptm-admin-wrap {
+  margin: 20px 20px 0 0;
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+}
+
+.vaptm-admin-wrap h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1d2327;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.vaptm-admin-wrap h1::before {
+  content: "\f132";
+  font-family: dashicons;
+  margin-right: 10px;
+  color: #2271b1;
+}
+
+.vaptm-main-tabs .components-tab-panel__tabs {
+  border-bottom: 1px solid #dcdcde;
+  margin-bottom: 20px;
+}
+
+.vaptm-main-tabs .components-tab-panel__tabs-item {
+  font-weight: 600;
+  padding: 10px 20px;
+}
+
+.vaptm-main-tabs .components-tab-panel__tabs-item.is-active {
+  border-bottom: 3px solid #72aee6;
+}
+
+.wp-list-table th {
+  font-weight: 700;
+}
+
+.wp-list-table .description {
+  font-style: italic;
+  color: #646970;
+  margin-top: 4px;
+}
+
+.components-panel__body-title {
+  font-weight: 700 !important;
+}
+
+/* Status Select Styles */
+.vaptm-admin-wrap .components-select-control__input {
+  min-width: 150px;
+}
+
+/* Toggle Styles */
+.vaptm-admin-wrap .components-form-toggle {
+  margin: 0 auto;
+}
+
+.vaptm-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid #dcdcde;
+  border-radius: 4px;
+}
+
+.vaptm-feature-grid .components-base-control {
+  margin-bottom: 0;
+  padding: 10px;
+  background: #f6f7f7;
+  border-radius: 4px;
+}
