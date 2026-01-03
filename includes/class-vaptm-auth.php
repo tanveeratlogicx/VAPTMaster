@@ -79,7 +79,7 @@ class VAPTM_Auth
 
       delete_transient('vaptm_otp_email_' . VAPTM_SUPERADMIN_USER);
 
-      wp_safe_redirect(admin_url('admin.php?page=vapt-builder'));
+      wp_safe_redirect(admin_url('admin.php?page=vapt-domain-admin'));
       exit;
     }
   }

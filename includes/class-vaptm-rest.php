@@ -42,15 +42,34 @@ class VAPTM_REST
       'permission_callback' => array($this, 'check_permission'),
     ));
 
-    register_rest_route('vaptm/v1', '/delete-json', array(
-      'methods' => 'POST',
-      'callback' => array($this, 'delete_json'),
-      'permission_callback' => array($this, 'check_permission'),
-    ));
 
     register_rest_route('vaptm/v1', '/features/update', array(
       'methods'  => 'POST',
       'callback' => array($this, 'update_feature'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/features/transition', array(
+      'methods'  => 'POST',
+      'callback' => array($this, 'transition_feature'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/features/(?P<key>[a-zA-Z0-9_-]+)/history', array(
+      'methods'  => 'GET',
+      'callback' => array($this, 'get_feature_history'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/assignees', array(
+      'methods'  => 'GET',
+      'callback' => array($this, 'get_assignees'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/features/assign', array(
+      'methods'  => 'POST',
+      'callback' => array($this, 'update_assignment'),
       'permission_callback' => array($this, 'check_permission'),
     ));
 
@@ -119,7 +138,8 @@ class VAPTM_REST
     foreach ($statuses as $row) {
       $status_map[$row['feature_key']] = array(
         'status' => $row['status'],
-        'implemented_at' => $row['implemented_at']
+        'implemented_at' => $row['implemented_at'],
+        'assigned_to' => $row['assigned_to']
       );
     }
 
@@ -131,10 +151,11 @@ class VAPTM_REST
       $key = isset($feature['key']) ? $feature['key'] : sanitize_title($feature['label']);
       $feature['key'] = $key;
 
-      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'draft', 'implemented_at' => null);
+      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'draft', 'implemented_at' => null, 'assigned_to' => null);
 
       $feature['status'] = $st['status'];
       $feature['implemented_at'] = $st['implemented_at'];
+      $feature['assigned_to'] = $st['assigned_to'];
 
       $meta = VAPTM_DB::get_feature_meta($key);
       if ($meta) {
@@ -178,17 +199,55 @@ class VAPTM_REST
     $status = $request->get_param('status');
     $include_test = $request->get_param('include_test_method');
     $include_verification = $request->get_param('include_verification');
+    $is_enforced = $request->get_param('is_enforced');
 
     if ($status) {
-      VAPTM_DB::update_feature_status($key, $status);
+      $note = $request->get_param('transition_note') ?: '';
+      $result = VAPTM_Workflow::transition_feature($key, $status, $note);
+      if (is_wp_error($result)) {
+        return new WP_REST_Response($result, 400);
+      }
     }
 
-    VAPTM_DB::update_feature_meta($key, array(
-      'include_test_method'  => $include_test ? 1 : 0,
-      'include_verification' => $include_verification ? 1 : 0,
-    ));
+    $meta_updates = array();
+    if ($include_test !== null) $meta_updates['include_test_method'] = $include_test ? 1 : 0;
+    if ($include_verification !== null) $meta_updates['include_verification'] = $include_verification ? 1 : 0;
+    if ($is_enforced !== null) $meta_updates['is_enforced'] = $is_enforced ? 1 : 0;
+
+    if (! empty($meta_updates)) {
+      VAPTM_DB::update_feature_meta($key, $meta_updates);
+    }
 
     return new WP_REST_Response(array('success' => true), 200);
+  }
+
+  /**
+   * Dedicated Transition Endpoint
+   */
+  public function transition_feature($request)
+  {
+    $key = $request->get_param('key');
+    $status = $request->get_param('status');
+    $note = $request->get_param('note') ?: '';
+
+    $result = VAPTM_Workflow::transition_feature($key, $status, $note);
+
+    if (is_wp_error($result)) {
+      return new WP_REST_Response($result, 400);
+    }
+
+    return new WP_REST_Response(array('success' => true), 200);
+  }
+
+  /**
+   * Get Audit History for a Feature
+   */
+  public function get_feature_history($request)
+  {
+    $key = $request['key'];
+    $history = VAPTM_Workflow::get_history($key);
+
+    return new WP_REST_Response($history, 200);
   }
 
   public function upload_json($request)
@@ -326,6 +385,34 @@ class VAPTM_REST
     }
 
     return new WP_REST_Response(array('error' => 'Build failed'), 500);
+  }
+
+  /**
+   * Get list of users who can be assigned to features
+   */
+  public function get_assignees()
+  {
+    $users = get_users(array('role' => 'administrator'));
+    $assignees = array_map(function ($u) {
+      return array('id' => $u->ID, 'name' => $u->display_name);
+    }, $users);
+
+    return new WP_REST_Response($assignees, 200);
+  }
+
+  /**
+   * Update feature assignment
+   */
+  public function update_assignment($request)
+  {
+    global $wpdb;
+    $key = $request->get_param('key');
+    $user_id = $request->get_param('user_id');
+
+    $table_status = $wpdb->prefix . 'vaptm_feature_status';
+    $wpdb->update($table_status, array('assigned_to' => $user_id ? $user_id : null), array('feature_key' => $key));
+
+    return new WP_REST_Response(array('success' => true), 200);
   }
 }
 
