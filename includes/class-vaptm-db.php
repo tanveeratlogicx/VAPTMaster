@@ -40,7 +40,7 @@ class VAPTM_DB
       'status'      => $status,
     );
 
-    if ($status === 'implemented') {
+    if ($status === 'release') {
       $data['implemented_at'] = current_time('mysql');
     } else {
       $data['implemented_at'] = null;

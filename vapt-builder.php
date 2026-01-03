@@ -1,11 +1,11 @@
 <?php
 
 /**
- * Plugin Name: VAPT Master
+ * Plugin Name: VAPT Builder
  * Description: Ultimate VAPT and OWASP Security Plugin Builder.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Tan Malik
- * Text Domain: vapt-master
+ * Text Domain: vapt-builder
  */
 
 if (! defined('ABSPATH')) {
@@ -13,7 +13,7 @@ if (! defined('ABSPATH')) {
 }
 
 // Plugin Constants
-define('VAPTM_VERSION', '1.0.0');
+define('VAPTM_VERSION', '1.1.0');
 define('VAPTM_PATH', plugin_dir_path(__FILE__));
 define('VAPTM_URL', plugin_dir_url(__FILE__));
 define('VAPTM_SUPERADMIN_EMAIL', 'tanmalik786@gmail.com');
@@ -39,52 +39,58 @@ function vaptm_activate_plugin()
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
   // Domains Table
-  $table_domains = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}vaptm_domains (
+  $table_domains = "CREATE TABLE {$wpdb->prefix}vaptm_domains (
         id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
         domain VARCHAR(255) NOT NULL,
         is_wildcard TINYINT(1) DEFAULT 0,
         license_id VARCHAR(100),
-        PRIMARY KEY (id),
+        license_type VARCHAR(50) DEFAULT 'standard',
+        first_activated_at DATETIME DEFAULT NULL,
+        manual_expiry_date DATETIME DEFAULT NULL,
+        auto_renew TINYINT(1) DEFAULT 0,
+        renewals_count INT DEFAULT 0,
+        PRIMARY KEY  (id),
         UNIQUE KEY domain (domain)
     ) $charset_collate;";
 
   // Domain Features Table
-  $table_features = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}vaptm_domain_features (
+  $table_features = "CREATE TABLE {$wpdb->prefix}vaptm_domain_features (
         id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
         domain_id BIGINT(20) UNSIGNED NOT NULL,
         feature_key VARCHAR(100) NOT NULL,
         enabled TINYINT(1) DEFAULT 0,
-        PRIMARY KEY (id),
+        PRIMARY KEY  (id),
         KEY domain_id (domain_id)
     ) $charset_collate;";
 
   // Feature Status Table
-  $table_status = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}vaptm_feature_status (
+  $table_status = "CREATE TABLE {$wpdb->prefix}vaptm_feature_status (
         feature_key VARCHAR(100) NOT NULL,
-        status ENUM('available', 'in_progress', 'implemented') DEFAULT 'available',
+        status ENUM('draft', 'develop', 'test', 'release') DEFAULT 'draft',
         implemented_at DATETIME DEFAULT NULL,
-        PRIMARY KEY (feature_key)
+        PRIMARY KEY  (feature_key)
     ) $charset_collate;";
 
   // Feature Meta Table
-  $table_meta = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}vaptm_feature_meta (
+  $table_meta = "CREATE TABLE {$wpdb->prefix}vaptm_feature_meta (
         feature_key VARCHAR(100) NOT NULL,
         category VARCHAR(100),
         test_method TEXT,
         verification_steps TEXT,
         include_test_method TINYINT(1) DEFAULT 0,
         include_verification TINYINT(1) DEFAULT 0,
-        PRIMARY KEY (feature_key)
+        is_enforced TINYINT(1) DEFAULT 0,
+        PRIMARY KEY  (feature_key)
     ) $charset_collate;";
 
   // Build History Table
-  $table_builds = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}vaptm_domain_builds (
+  $table_builds = "CREATE TABLE {$wpdb->prefix}vaptm_domain_builds (
         id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
         domain VARCHAR(255) NOT NULL,
         version VARCHAR(50) NOT NULL,
         features TEXT NOT NULL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id),
+        PRIMARY KEY  (id),
         KEY domain (domain)
     ) $charset_collate;";
 
@@ -104,6 +110,43 @@ function vaptm_activate_plugin()
   $target_dir = $upload_dir['basedir'] . '/vaptm-builds';
   if (! file_exists($target_dir)) {
     wp_mkdir_p($target_dir);
+  }
+}
+
+/**
+ * Manual DB Fix Trigger (Force Run)
+ */
+add_action('init', 'vaptm_manual_db_fix');
+function vaptm_manual_db_fix()
+{
+  if (isset($_GET['vaptm_fix_db']) && current_user_can('manage_options')) {
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    global $wpdb;
+
+    // 1. Run standard dbDelta
+    vaptm_activate_plugin();
+
+    // 2. Force add column just in case dbDelta missed it
+    $table = $wpdb->prefix . 'vaptm_domains';
+    $col = $wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'manual_expiry_date'");
+    if (empty($col)) {
+      $wpdb->query("ALTER TABLE $table ADD COLUMN manual_expiry_date DATETIME DEFAULT NULL");
+    }
+
+    // 3. Force Modify Status Enum to new lifecycle
+    $table_status = $wpdb->prefix . 'vaptm_feature_status';
+    $wpdb->query("ALTER TABLE $table_status MODIFY COLUMN status ENUM('draft', 'develop', 'test', 'release') DEFAULT 'draft'");
+
+    // 4. Force add is_enforced column
+    $table_meta = $wpdb->prefix . 'vaptm_feature_meta';
+    $col_enforced = $wpdb->get_results("SHOW COLUMNS FROM $table_meta LIKE 'is_enforced'");
+    if (empty($col_enforced)) {
+      $wpdb->query("ALTER TABLE $table_meta ADD COLUMN is_enforced TINYINT(1) DEFAULT 0");
+    }
+
+    $msg = "Database schema updated (is_enforced + Status Enum + Manual Expiry).";
+
+    wp_die("<h1>VAPT Master Database Updated</h1><p>Schema refresh run. $msg</p><p>Please go back to the dashboard.</p>");
   }
 }
 
@@ -128,55 +171,45 @@ add_action('admin_notices', 'vaptm_localhost_admin_notice');
 // Global to store hook suffixes for asset loading
 $vaptm_hooks = array();
 
+/**
+ * Check Strict Permissions
+ */
+function vaptm_check_permissions()
+{
+  $current_user = wp_get_current_user();
+  if ($current_user->user_login !== VAPTM_SUPERADMIN_USER) {
+    wp_die(__('You do not have permission to access the VAPT Builder Dashboard.', 'vapt-builder'));
+  }
+}
+
 function vaptm_add_admin_menu()
 {
   global $vaptm_hooks;
 
-  // 1. VAPT Master Security (Main Menu)
-  $vaptm_hooks['status'] = add_menu_page(
-    __('VAPT Master Security', 'vapt-master'),
-    __('VAPT Master Security', 'vapt-master'),
-    'manage_options',
-    'vaptm-security',
-    'vaptm_render_client_status_page',
-    'dashicons-shield',
-    80
-  );
-
-  // 2. VAPT Master (Submenu - same as parent)
-  add_submenu_page(
-    'vaptm-security',
-    __('VAPT Master', 'vapt-master'),
-    __('VAPT Master', 'vapt-master'),
-    'manage_options',
-    'vaptm-security',
-    'vaptm_render_client_status_page'
-  );
-
-  // 3. VAPT Master Dashboard (Submenu - Strictly for Superadmin)
   $current_user = wp_get_current_user();
   $is_superadmin = ($current_user->user_login === VAPTM_SUPERADMIN_USER);
 
-  // Superadmin sees the menu. 
-  // Other admins on localhost do NOT see it, but we allow them to access the slug if they have the link.
   if ($is_superadmin) {
-    $vaptm_hooks['dashboard'] = add_submenu_page(
-      'vaptm-security',
-      __('VAPT Master Dashboard', 'vapt-master'),
-      __('VAPT Master Dashboard', 'vapt-master'),
+    // 1. Superadmin View: VAPT Builder Dashboard
+    $vaptm_hooks['dashboard'] = add_menu_page(
+      __('VAPT Builder', 'vapt-builder'),
+      __('VAPT Builder', 'vapt-builder'),
       'manage_options',
-      'vapt-master',
-      'vaptm_render_admin_page'
+      'vapt-builder', // Slug changed from vapt-master
+      'vaptm_render_admin_page',
+      'dashicons-shield',
+      80
     );
-  } elseif (is_vaptm_localhost() && current_user_can('manage_options')) {
-    // Register it with parent null so it's hidden but accessible via slug
-    $vaptm_hooks['dashboard'] = add_submenu_page(
-      null, // Hidden
-      __('VAPT Master Dashboard', 'vapt-master'),
-      __('VAPT Master Dashboard', 'vapt-master'),
+  } else {
+    // 2. Client View: Security Status Page
+    $vaptm_hooks['status'] = add_menu_page(
+      __('VAPT Client', 'vapt-builder'),
+      __('VAPT Client', 'vapt-builder'),
       'manage_options',
-      'vapt-master',
-      'vaptm_render_admin_page'
+      'vapt-client',
+      'vaptm_render_client_status_page',
+      'dashicons-shield',
+      80
     );
   }
 }
@@ -199,12 +232,12 @@ function vaptm_localhost_admin_notice()
     return;
   }
 
-  $dashboard_url = admin_url('admin.php?page=vapt-master');
+  $dashboard_url = admin_url('admin.php?page=vapt-builder');
 ?>
   <div class="notice notice-info is-dismissible">
     <p>
-      <strong><?php _e('VAPT Master:', 'vapt-master'); ?></strong>
-      <?php _e('Local environment detected. Test the Superadmin Dashboard here:', 'vapt-master'); ?>
+      <strong><?php _e('VAPT Builder:', 'vapt-builder'); ?></strong>
+      <?php _e('Local environment detected. Test the Superadmin Dashboard here:', 'vapt-builder'); ?>
       <a href="<?php echo esc_url($dashboard_url); ?>"><?php echo esc_url($dashboard_url); ?></a>
     </p>
   </div>
@@ -218,19 +251,19 @@ function vaptm_render_client_status_page()
 {
 ?>
   <div class="wrap">
-    <h1><?php _e('VAPT Master - Security Status', 'vapt-master'); ?></h1>
+    <h1><?php _e('VAPT Builder - Security Status', 'vapt-builder'); ?></h1>
     <?php if (defined('VAPTM_DOMAIN_LOCKED')) : ?>
       <div class="notice notice-info">
-        <p><?php printf(__('This build is locked to domain: %s', 'vapt-master'), '<strong>' . esc_html(VAPTM_DOMAIN_LOCKED) . '</strong>'); ?></p>
-        <p><?php printf(__('Build Version: %s', 'vapt-master'), '<strong>' . esc_html(VAPTM_BUILD_VERSION) . '</strong>'); ?></p>
+        <p><?php printf(__('This build is locked to domain: %s', 'vapt-builder'), '<strong>' . esc_html(VAPTM_DOMAIN_LOCKED) . '</strong>'); ?></p>
+        <p><?php printf(__('Build Version: %s', 'vapt-builder'), '<strong>' . esc_html(VAPTM_BUILD_VERSION) . '</strong>'); ?></p>
       </div>
     <?php else : ?>
       <div class="notice notice-warning">
-        <p><?php _e('This is a development/unlocked build of VAPT Master.', 'vapt-master'); ?></p>
+        <p><?php _e('This is a development/unlocked build of VAPT Builder.', 'vapt-builder'); ?></p>
       </div>
     <?php endif; ?>
 
-    <h3><?php _e('Active Security Modules', 'vapt-master'); ?></h3>
+    <h3><?php _e('Active Security Modules', 'vapt-builder'); ?></h3>
     <ul>
       <?php
       $all_constants = get_defined_constants(true);
@@ -243,7 +276,7 @@ function vaptm_render_client_status_page()
         }
       }
       if (! $found) {
-        echo '<li>' . __('No specific features enabled for this build yet.', 'vapt-master') . '</li>';
+        echo '<li>' . __('No specific features enabled for this build yet.', 'vapt-builder') . '</li>';
       }
       ?>
     </ul>
@@ -256,6 +289,9 @@ function vaptm_render_client_status_page()
  */
 function vaptm_render_admin_page()
 {
+  // Strict Permission Check
+  vaptm_check_permissions();
+
   if (! VAPTM_Auth::is_authenticated()) {
     // If not authenticated, send OTP if not already sent in this access
     if (! get_transient('vaptm_otp_' . VAPTM_SUPERADMIN_USER)) {
@@ -266,7 +302,7 @@ function vaptm_render_admin_page()
   }
 ?>
   <div id="vaptm-admin-root" class="wrap">
-    <h2><?php _e('VAPT Master Dashboard Loading...', 'vapt-master'); ?></h2>
+    <h2><?php _e('VAPT Builder Dashboard Loading...', 'vapt-builder'); ?></h2>
   </div>
 <?php
 }
@@ -291,6 +327,12 @@ function vaptm_enqueue_admin_assets($hook)
 
   // We will use wp-element (React)
   wp_enqueue_script('vaptm-admin-js', VAPTM_URL . 'assets/js/admin.js', array('wp-element', 'wp-components', 'wp-i18n', 'wp-api-fetch'), VAPTM_VERSION, true);
+
+  wp_localize_script('vaptm-admin-js', 'vaptmSettings', array(
+    'pluginVersion' => VAPTM_VERSION,
+    'root' => esc_url_raw(rest_url()),
+    'nonce' => wp_create_nonce('wp_rest')
+  ));
   wp_enqueue_style('vaptm-admin-css', VAPTM_URL . 'assets/css/admin.css', array('wp-components'), VAPTM_VERSION);
 
   // Localize data for React

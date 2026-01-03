@@ -24,9 +24,27 @@ class VAPTM_REST
       'permission_callback' => array($this, 'check_permission'),
     ));
 
+    register_rest_route('vaptm/v1', '/data-files/all', array(
+      'methods' => 'GET',
+      'callback' => array($this, 'get_all_data_files'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
     register_rest_route('vaptm/v1', '/data-files', array(
       'methods'  => 'GET',
       'callback' => array($this, 'get_data_files'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/update-hidden-files', array(
+      'methods' => 'POST',
+      'callback' => array($this, 'update_hidden_files'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
+
+    register_rest_route('vaptm/v1', '/delete-json', array(
+      'methods' => 'POST',
+      'callback' => array($this, 'delete_json'),
       'permission_callback' => array($this, 'check_permission'),
     ));
 
@@ -113,7 +131,7 @@ class VAPTM_REST
       $key = isset($feature['key']) ? $feature['key'] : sanitize_title($feature['label']);
       $feature['key'] = $key;
 
-      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'available', 'implemented_at' => null);
+      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'draft', 'implemented_at' => null);
 
       $feature['status'] = $st['status'];
       $feature['implemented_at'] = $st['implemented_at'];
@@ -137,12 +155,17 @@ class VAPTM_REST
     $files = array_diff(scandir($data_dir), array('..', '.'));
     $json_files = [];
 
+    $hidden_files = get_option('vaptm_hidden_json_files', array());
+
     foreach ($files as $file) {
-      if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
-        $json_files[] = array(
-          'label' => $file,
-          'value' => $file
-        );
+      if (strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'json') {
+        // Only include if NOT hidden
+        if (!in_array($file, $hidden_files)) {
+          $json_files[] = array(
+            'label' => $file,
+            'value' => $file
+          );
+        }
       }
     }
 
@@ -188,6 +211,46 @@ class VAPTM_REST
     file_put_contents($json_path, $content);
 
     return new WP_REST_Response(array('success' => true, 'filename' => $filename), 200);
+  }
+
+  /**
+   * Update Hidden JSON Files List
+   */
+  public function update_hidden_files($request)
+  {
+    $hidden_files = $request->get_param('hidden_files');
+    if (!is_array($hidden_files)) {
+      $hidden_files = array();
+    }
+
+    // Sanitize
+    $hidden_files = array_map('sanitize_file_name', $hidden_files);
+
+    update_option('vaptm_hidden_json_files', $hidden_files);
+
+    return new WP_REST_Response(array('success' => true, 'hidden_files' => $hidden_files), 200);
+  }
+
+  /**
+   * Get All JSON files (including hidden ones, for management UI)
+   */
+  public function get_all_data_files()
+  {
+    $data_dir = VAPTM_PATH . 'data';
+    $files = array_diff(scandir($data_dir), array('..', '.'));
+    $json_files = [];
+    $hidden_files = get_option('vaptm_hidden_json_files', array());
+
+    foreach ($files as $file) {
+      if (strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'json') {
+        $json_files[] = array(
+          'filename' => $file,
+          'isHidden' => in_array($file, $hidden_files)
+        );
+      }
+    }
+
+    return new WP_REST_Response($json_files, 200);
   }
 
   public function get_domains()

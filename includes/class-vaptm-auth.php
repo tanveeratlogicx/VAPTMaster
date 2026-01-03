@@ -42,16 +42,15 @@ class VAPTM_Auth
     $hashed_otp = wp_hash_password($otp);
 
     // Store OTP in transient for 10 minutes
-    // We tie the OTP to the Superadmin specifically since they are the one receiving it
-    set_transient('vaptm_otp_' . VAPTM_SUPERADMIN_USER, $hashed_otp, 10 * MINUTE_IN_SECONDS);
+    // Email Only per user request
+    set_transient('vaptm_otp_email_' . VAPTM_SUPERADMIN_USER, $hashed_otp, 10 * MINUTE_IN_SECONDS);
 
+    // 1. Send Email
     $message = sprintf(
-      __('Your VAPT Master verification code is: %s. This code will expire in 10 minutes.', 'vapt-master'),
+      __('Your VAPT Builder verification code is: %s. This code will expire in 10 minutes.', 'vapt-builder'),
       $otp
     );
-
-    // ALWAYS send to the Superadmin email
-    wp_mail(VAPTM_SUPERADMIN_EMAIL, __('VAPT Master - Verification Code', 'vapt-master'), $message);
+    wp_mail(VAPTM_SUPERADMIN_EMAIL, __('VAPT Builder - Verification Code', 'vapt-builder'), $message);
   }
 
   /**
@@ -63,24 +62,24 @@ class VAPTM_Auth
       return;
     }
 
-    if (! isset($_POST['vaptm_otp_code'])) {
+    if (! isset($_POST['vaptm_email_otp'])) {
       return;
     }
 
-    $submitted_otp = sanitize_text_field($_POST['vaptm_otp_code']);
-    $stored_otp = get_transient('vaptm_otp_' . VAPTM_SUPERADMIN_USER);
+    $submitted_otp = sanitize_text_field($_POST['vaptm_email_otp']);
+    $stored_otp = get_transient('vaptm_otp_email_' . VAPTM_SUPERADMIN_USER);
 
     if ($stored_otp && wp_check_password($submitted_otp, $stored_otp)) {
-      // Successful verification - set user-specific transient for 2 hours
+      // Successful verification
       $user_id = get_current_user_id();
       set_transient('vaptm_auth_' . $user_id, array(
         'user' => VAPTM_SUPERADMIN_USER,
         'time' => time()
       ), 2 * HOUR_IN_SECONDS);
 
-      delete_transient('vaptm_otp_' . VAPTM_SUPERADMIN_USER);
+      delete_transient('vaptm_otp_email_' . VAPTM_SUPERADMIN_USER);
 
-      wp_safe_redirect(admin_url('admin.php?page=vapt-master'));
+      wp_safe_redirect(admin_url('admin.php?page=vapt-builder'));
       exit;
     }
   }
@@ -142,9 +141,9 @@ class VAPTM_Auth
         border-radius: 8px;
         border: none;
         background: rgba(255, 255, 255, 0.9);
-        font-size: 24px;
+        font-size: 20px;
         text-align: center;
-        letter-spacing: 10px;
+        letter-spacing: 5px;
         margin-bottom: 20px;
         color: #1a237e;
         font-weight: bold;
@@ -192,22 +191,22 @@ class VAPTM_Auth
     <div class="vaptm-otp-overlay">
       <div class="vaptm-otp-box">
         <div style="font-size: 40px; margin-bottom: 20px;">🛡️</div>
-        <h2><?php _e('Identity Verification', 'vapt-master'); ?></h2>
-        <p><?php _e('A secure 6-digit code has been sent to your registered email. Please enter it below to access the VAPT Master Dashboard.', 'vapt-master'); ?></p>
+        <h2><?php _e('Identity Verification', 'vapt-builder'); ?></h2>
+        <p><?php _e('Enter the 6-digit code sent to your Email.', 'vapt-builder'); ?></p>
         <form method="POST" action="">
           <?php wp_nonce_field('vaptm_verify_otp', 'vaptm_otp_nonce'); ?>
-          <input type="text" name="vaptm_otp_code" class="vaptm-otp-input" placeholder="000000" maxlength="6" autofocus required autocomplete="one-time-code" />
-          <button type="submit" name="vaptm_otp_submit" class="vaptm-otp-submit"><?php _e('Verify & Access', 'vapt-master'); ?></button>
+          <input type="text" name="vaptm_email_otp" class="vaptm-otp-input" placeholder="000000" maxlength="6" autofocus required autocomplete="one-time-code" />
+          <button type="submit" name="vaptm_otp_submit" class="vaptm-otp-submit"><?php _e('Verify & Access', 'vapt-builder'); ?></button>
         </form>
         <?php
         if (isset($_POST['vaptm_otp_submit'])) {
-          echo '<div class="vaptm-otp-error">' . __('Invalid or expired OTP. Please try again.', 'vapt-master') . '</div>';
+          echo '<div class="vaptm-otp-error">' . __('Invalid or expired code. Please try again.', 'vapt-builder') . '</div>';
         }
         if (isset($_GET['resend_otp'])) {
-          echo '<div style="margin-top:10px; color:#00e676;">' . __('A new code has been sent!', 'vapt-master') . '</div>';
+          echo '<div style="margin-top:10px; color:#00e676;">' . __('A new code has been sent!', 'vapt-builder') . '</div>';
         }
         ?>
-        <a href="<?php echo esc_url(add_query_arg('resend_otp', '1')); ?>" class="vaptm-resend"><?php _e('Didn\'t receive a code? Resend', 'vapt-master'); ?></a>
+        <a href="<?php echo esc_url(add_query_arg('resend_otp', '1')); ?>" class="vaptm-resend"><?php _e('Didn\'t receive the code? Resend', 'vapt-builder'); ?></a>
       </div>
     </div>
 <?php
