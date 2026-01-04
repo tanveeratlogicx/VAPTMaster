@@ -31,27 +31,12 @@
 
     const fetchData = () => {
       setLoading(true);
-      console.log('Fetching Features for Client...');
       apiFetch({ path: 'vaptm/v1/features?scope=client' })
         .then(data => {
-          console.log('Features Fetched:', data);
-          console.log('Active Status:', activeStatus);
-          console.log('Is Super:', isSuper);
           setFeatures(data);
           setLoading(false);
-
-          // Debugging specific feature
-          const target = data.find(f => f.label.includes('htaccess') || f.key.includes('htaccess'));
-          if (target) {
-            console.log('Htaccess Feature Found:', target);
-            console.log('Status:', target.status);
-            console.log('Generated Schema:', target.generated_schema);
-          } else {
-            console.warn('Htaccess Feature NOT FOUND in response.');
-          }
         })
         .catch(err => {
-          console.error('Fetch Error:', err);
           setError(err.message || 'Failed to load features');
           setLoading(false);
         });

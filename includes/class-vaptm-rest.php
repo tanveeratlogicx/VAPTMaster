@@ -242,11 +242,7 @@ class VAPTM_REST
       }
     }
 
-    // DEBUG LOGGING
-    if ($generated_schema !== null) {
-      error_log('VAPTM UPDATE: Received generated_schema: ' . print_r($generated_schema, true));
-      error_log('VAPTM UPDATE: Type: ' . gettype($generated_schema));
-    }
+    // DEBUG LOGGING removed
 
     $meta_updates = array();
     if ($include_test !== null) $meta_updates['include_test_method'] = $include_test ? 1 : 0;
