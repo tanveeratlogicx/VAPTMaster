@@ -40,7 +40,7 @@ class VAPTM_DB
       'status'      => $status,
     );
 
-    if ($status === 'release') {
+    if ($status === 'Release') {
       $data['implemented_at'] = current_time('mysql');
     } else {
       $data['implemented_at'] = null;
@@ -88,6 +88,10 @@ class VAPTM_DB
       'verification_steps'   => '',
       'include_test_method'  => 0,
       'include_verification' => 0,
+      'is_enforced'          => 0,
+      'wireframe_url'        => null,
+      'generated_schema'     => null,
+      'implementation_data'  => null,
     );
 
     $existing = self::get_feature_meta($key);
@@ -96,7 +100,7 @@ class VAPTM_DB
     return $wpdb->replace(
       $table,
       $final_data,
-      array('%s', '%s', '%s', '%s', '%d', '%d')
+      array('%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s')
     );
   }
 

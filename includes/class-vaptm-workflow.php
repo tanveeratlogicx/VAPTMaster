@@ -15,9 +15,9 @@ class VAPTM_Workflow
    */
   public static function is_transition_allowed($old_status, $new_status)
   {
-    // Map legacy status if they exist
-    $old = self::map_status($old_status);
-    $new = self::map_status($new_status);
+    // Map legacy status if they exist and normalize to lowercase for rules
+    $old = strtolower(self::map_status($old_status));
+    $new = strtolower(self::map_status($new_status));
 
     if ($old === $new) return true;
 
@@ -55,11 +55,18 @@ class VAPTM_Workflow
 
     // Update Status
     $update_data = array('status' => $new_status);
-    if ($new_status === 'release') {
+    if ($new_status === 'Release' || $new_status === 'release') {
       $update_data['implemented_at'] = current_time('mysql');
+    } else {
+      $update_data['implemented_at'] = null;
     }
 
-    $wpdb->update($table_status, $update_data, array('feature_key' => $feature_key));
+    if ($current) {
+      $wpdb->update($table_status, $update_data, array('feature_key' => $feature_key));
+    } else {
+      $update_data['feature_key'] = $feature_key;
+      $wpdb->insert($table_status, $update_data);
+    }
 
     // Record History
     $wpdb->insert($table_history, array(

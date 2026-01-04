@@ -8,14 +8,22 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
     return;
   }
 
-  const { render, useState, useEffect, createElement: el } = wp.element || {};
+  const { render, useState, useEffect, Fragment, createElement: el } = wp.element || {};
   const {
     TabPanel, Panel, PanelBody, PanelRow, Button, Dashicon,
     ToggleControl, SelectControl, Modal, TextControl, Spinner,
-    Notice, Placeholder, Dropdown, CheckboxControl
+    Notice, Placeholder, Dropdown, CheckboxControl, BaseControl, Icon,
+    TextareaControl
   } = wp.components || {};
   const apiFetch = wp.apiFetch;
   const { __, sprintf } = wp.i18n || {};
+  // Global Settings from wp_localize_script
+  const settings = window.vaptmSettings || {};
+  const isSuper = settings.isSuper || false;
+  // Import Auto-Generator
+  const Generator = window.VAPTM_Generator;
+  // Import Generated Interface UI
+  const GeneratedInterface = window.VAPTM_GeneratedInterface;
 
   if (!wp.element || !wp.components || !wp.apiFetch || !wp.i18n) {
     console.error('VAPT Builder: One or more WordPress dependencies are missing!', {
@@ -27,7 +35,7 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
     return;
   }
 
-  const FeatureList = ({ features, updateFeature, loading, dataFiles, selectedFile, onSelectFile, onUpload, allFiles, hiddenFiles, onUpdateHiddenFiles, isManageModalOpen, setIsManageModalOpen, assignees, onAssign }) => {
+  const FeatureList = ({ features, updateFeature, loading, dataFiles, selectedFile, onSelectFile, onUpload, allFiles, hiddenFiles, onUpdateHiddenFiles, isManageModalOpen, setIsManageModalOpen }) => {
     const [filterStatus, setFilterStatus] = useState(() => localStorage.getItem('vaptm_filter_status') || 'all');
     const [selectedCategories, setSelectedCategories] = useState(() => {
       const saved = localStorage.getItem('vaptm_selected_categories');
@@ -45,14 +53,37 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
     }, [filterStatus, selectedCategories, sortBy, searchQuery]);
 
     const [historyFeature, setHistoryFeature] = useState(null);
+    const [designFeature, setDesignFeature] = useState(null);
     const [transitioning, setTransitioning] = useState(null); // { key, nextStatus, note }
+    const [saveStatus, setSaveStatus] = useState(null); // Feedback for media/clipboard uploads
 
-    const confirmTransition = () => {
+    const confirmTransition = (formValues) => {
       if (!transitioning) return;
-      updateFeature(transitioning.key, {
-        status: transitioning.nextStatus,
-        transition_note: transitioning.note
-      });
+      const { key, nextStatus } = transitioning;
+      const { note, devInstruct, wireframeUrl } = formValues;
+
+      const feature = features.find(f => f.key === key);
+      let updates = { status: nextStatus, history_note: note };
+
+      // Save Wireframe if provided
+      if (wireframeUrl) {
+        updates.wireframe_url = wireframeUrl;
+      }
+
+      // Auto-Generate Interface when moving to 'Develop' (Phase 6 transition)
+      if (nextStatus === 'Develop' && Generator && feature && feature.remediation) {
+        try {
+          const schema = Generator.generate(feature.remediation, devInstruct);
+          if (schema) {
+            updates.generated_schema = schema;
+            console.log('VAPT Master: Auto-generated schema for ' + key, schema);
+          }
+        } catch (e) {
+          console.error('VAPT Master: Generation error', e);
+        }
+      }
+
+      updateFeature(key, updates);
       setTransitioning(null);
     };
 
@@ -69,21 +100,21 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
       processedFeatures = processedFeatures.filter(f => selectedCategories.includes(f.category));
     }
 
-    // Analytics (Scoped to Category selection)
     const stats = {
       total: processedFeatures.length,
-      draft: processedFeatures.filter(f => f.status === 'draft' || f.status === 'available').length, // Map available to draft count
-      develop: processedFeatures.filter(f => f.status === 'develop' || f.status === 'in_progress').length,
-      test: processedFeatures.filter(f => f.status === 'test').length,
-      release: processedFeatures.filter(f => f.status === 'release' || f.status === 'implemented').length
+      draft: processedFeatures.filter(f => f.status === 'Draft' || f.status === 'draft' || f.status === 'available').length,
+      develop: processedFeatures.filter(f => f.status === 'Develop' || f.status === 'develop' || f.status === 'in_progress').length,
+      test: processedFeatures.filter(f => f.status === 'Test' || f.status === 'test').length,
+      release: processedFeatures.filter(f => f.status === 'Release' || f.status === 'release' || f.status === 'implemented').length
     };
 
     // Status Filter Second
     if (filterStatus !== 'all') {
       processedFeatures = processedFeatures.filter(f => {
-        if (filterStatus === 'draft') return f.status === 'draft' || f.status === 'available';
-        if (filterStatus === 'develop') return f.status === 'develop' || f.status === 'in_progress';
-        if (filterStatus === 'release') return f.status === 'release' || f.status === 'implemented';
+        if (filterStatus === 'Draft' || filterStatus === 'draft') return f.status === 'Draft' || f.status === 'draft' || f.status === 'available';
+        if (filterStatus === 'Develop' || filterStatus === 'develop') return f.status === 'Develop' || f.status === 'develop' || f.status === 'in_progress';
+        if (filterStatus === 'Release' || filterStatus === 'release') return f.status === 'Release' || f.status === 'release' || f.status === 'implemented';
+        if (filterStatus === 'Test' || filterStatus === 'test') return f.status === 'Test' || f.status === 'test';
         return f.status === filterStatus;
       });
     }
@@ -99,7 +130,12 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
     processedFeatures.sort((a, b) => {
       if (sortBy === 'name') return (a.name || a.label).localeCompare(b.name || b.label);
       if (sortBy === 'status') {
-        const priority = { 'release': 4, 'implemented': 4, 'test': 3, 'develop': 2, 'in_progress': 2, 'draft': 1, 'available': 1 };
+        const priority = {
+          'Release': 4, 'release': 4, 'implemented': 4,
+          'Test': 3, 'test': 3,
+          'Develop': 2, 'develop': 2, 'in_progress': 2,
+          'Draft': 1, 'draft': 1, 'available': 1
+        };
         return (priority[b.status] || 0) - (priority[a.status] || 0);
       }
       return 0;
@@ -149,16 +185,295 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
       ]);
     };
 
+    // Design/Schema Modal
+    const DesignModal = ({ feature, onClose }) => {
+      // Default prompt for guidance but still valid JSON
+      const defaultState = {
+        controls: [],
+        _instructions: "STOP! Do NOT copy this text. 1. Click 'Copy AI Design Prompt' button below. 2. Paste that into Antigravity Chat. 3. Paste the JSON result back here."
+      };
+      const defaultValue = JSON.stringify(feature.generated_schema || defaultState, null, 2);
+      const [schemaText, setSchemaText] = useState(defaultValue);
+      const [parsedSchema, setParsedSchema] = useState(feature.generated_schema || { controls: [] });
+      const [isSaving, setIsSaving] = useState(false);
+
+      // Handle real-time preview
+      const onJsonChange = (val) => {
+        setSchemaText(val);
+        try {
+          const parsed = JSON.parse(val);
+          if (parsed && parsed.controls) setParsedSchema(parsed);
+        } catch (e) {
+          // Silent fail for preview while typing
+        }
+      };
+
+      const handleSave = () => {
+        try {
+          const parsed = JSON.parse(schemaText);
+          setIsSaving(true);
+          updateFeature(feature.key, { generated_schema: parsed })
+            .then(() => {
+              setIsSaving(false);
+              onClose();
+            })
+            .catch(() => setIsSaving(false));
+        } catch (e) {
+          alert(__('Invalid JSON format. Please check your syntax.', 'vapt-builder'));
+        }
+      };
+
+      const copyContext = () => {
+        const prompt = `Please generate an interactive security interface JSON for the following feature:
+Feature: ${feature.label}
+Category: ${feature.category || 'General'}
+Description: ${feature.description || 'None provided'}
+Remediation (Core Logic): ${feature.remediation || 'None provided'}
+Additional Instructions: ${feature.devInstruct || 'None provided'}
+
+I need a JSON schema in this format:
+{
+  "controls": [
+    { "type": "toggle", "label": "Enable Protection", "key": "status" },
+    { "type": "input", "label": "Setting Name", "key": "setting_val", "default": "config_value" }
+  ]
+}
+Please provide ONLY the JSON block.`;
+
+        // Robust Copy Function with Fallback
+        const copyToClipboard = (text) => {
+          if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+          } else {
+            // Fallback for older browsers or non-secure contexts
+            let textArea = document.createElement("textarea");
+            textArea.value = text;
+
+            // Ensure strictly invisible but IN VIEWPORT to prevent scroll jumps
+            textArea.style.position = "fixed";
+            textArea.style.left = "0"; // Keep at (0,0) to avoid "jump to -9999px"
+            textArea.style.top = "0";
+            textArea.style.width = "1px";
+            textArea.style.height = "1px";
+            textArea.style.opacity = "0";
+            textArea.style.zIndex = "-1";
+            textArea.style.padding = "0";
+            textArea.style.border = "none";
+            textArea.style.outline = "none";
+            textArea.style.boxShadow = "none";
+            textArea.style.background = "transparent";
+            textArea.setAttribute("readonly", ""); // Prevent keyboard flash
+
+            document.body.appendChild(textArea);
+
+            // Focus without scrolling
+            if (textArea.focus) {
+              textArea.focus({ preventScroll: true });
+            } else {
+              textArea.focus();
+            }
+            textArea.select();
+
+            return new Promise((resolve, reject) => {
+              try {
+                document.execCommand('copy') ? resolve() : reject();
+              } catch (e) {
+                reject(e);
+              } finally {
+                textArea.remove();
+              }
+            });
+          }
+        };
+
+        copyToClipboard(prompt)
+          .then(() => {
+            setSaveStatus({ message: __('AI Prompt copied to clipboard!', 'vapt-builder'), type: 'success' });
+            setTimeout(() => setSaveStatus(null), 3000);
+          })
+          .catch((err) => {
+            console.error('Copy failed', err);
+            alert(__('Failed to copy to clipboard. Please manually copy the prompt from the console or try again.', 'vapt-builder'));
+          });
+      };
+
+      return el(Modal, {
+        title: sprintf(__('Design Implementation: %s', 'vapt-builder'), feature.label),
+        onRequestClose: onClose,
+        className: 'vaptm-design-modal',
+        style: { width: '1000px', maxWidth: '98%' }
+      }, [
+        el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', minHeight: '500px' } }, [
+          // Left Side: The Editor
+          el('div', { style: { display: 'flex', flexDirection: 'column', gap: '15px' } }, [
+            el('p', { style: { margin: 0, fontSize: '13px', color: '#666' } }, __('Paste the JSON schema generated via Antigravity (the AI Proxy) below.', 'vapt-builder')),
+            el(wp.components.TextareaControl, {
+              label: __('Interface JSON Schema', 'vapt-builder'),
+              value: schemaText,
+              onChange: onJsonChange,
+              rows: 18,
+              help: __('The sidebar workbench will render this instantly.', 'vapt-builder'),
+              style: { fontFamily: 'monospace', fontSize: '13px', background: '#fcfcfc' }
+            }),
+            el(Button, { isSecondary: true, onClick: copyContext, icon: 'clipboard', style: { alignSelf: 'flex-start' } }, __('Copy AI Design Prompt', 'vapt-builder'))
+          ]),
+
+          // Right Side: Live Preview
+          el('div', { style: { background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' } }, [
+            el('div', { style: { padding: '12px 20px', borderBottom: '1px solid #e5e7eb', background: '#fff', borderTopLeftRadius: '8px', borderTopRightRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' } }, [
+              el(Icon, { icon: 'visibility', size: 16 }),
+              el('strong', { style: { fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#4b5563' } }, __('Live Implementation Preview'))
+            ]),
+            el('div', { style: { padding: '24px', flexGrow: 1, overflowY: 'auto' } }, [
+              el('div', { style: { background: '#fff', padding: '20px', borderRadius: '12px', border: '1px solid #eee', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } }, [
+                el('h4', { style: { margin: '0 0 15px 0', fontSize: '14px', fontWeight: 700, color: '#111827' } }, __('Functional Workbench')),
+                GeneratedInterface
+                  ? el(GeneratedInterface, { feature: { ...feature, generated_schema: parsedSchema } })
+                  : el('p', null, __('Loading Preview Interface...', 'vapt-builder'))
+              ])
+            ]),
+            el('div', { style: { padding: '15px 20px', fontSize: '11px', color: '#9ca3af', fontStyle: 'italic', textAlign: 'center' } },
+              __('This is exactly what the user will see in their dashboard.', 'vapt-builder')
+            )
+          ])
+        ]),
+
+        // Footer Actions
+        el('div', { style: { marginTop: '30px', display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '20px', borderTop: '1px solid #eee' } }, [
+          el(Button, { isSecondary: true, onClick: onClose }, __('Cancel', 'vapt-builder')),
+          el(Button, { isPrimary: true, onClick: handleSave, isBusy: isSaving }, __('Save & Deploy to Workbench', 'vapt-builder'))
+        ])
+      ]);
+    };
+
+    // Performance-Isolated Transition Modal
+    const TransitionNoteModal = ({ transitioning, onConfirm, onCancel }) => {
+      const [formValues, setFormValues] = useState({
+        note: transitioning.note || '',
+        devInstruct: transitioning.devInstruct || '',
+        wireframeUrl: transitioning.wireframeUrl || ''
+      });
+      const [modalSaveStatus, setModalSaveStatus] = useState(null);
+
+      return el(Modal, {
+        title: sprintf(__('Transition to %s', 'vapt-builder'), transitioning.nextStatus),
+        onRequestClose: onCancel,
+        className: 'vaptm-transition-modal',
+        style: {
+          width: '600px',
+          maxWidth: '95%',
+          maxHeight: '800px',
+          overflow: 'hidden'
+        }
+      }, [
+        el('div', {
+          style: { height: '100%', display: 'flex', flexDirection: 'column' },
+          onPaste: (e) => {
+            if (transitioning.nextStatus !== 'Develop') return;
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (let index in items) {
+              const item = items[index];
+              if (item.kind === 'file' && item.type.indexOf('image/') !== -1) {
+                const blob = item.getAsFile();
+                setModalSaveStatus({ message: __('Uploading pasted image...', 'vapt-builder'), type: 'info' });
+
+                const formData = new FormData();
+                formData.append('file', blob);
+                formData.append('title', 'Pasted Wireframe - ' + transitioning.key);
+
+                apiFetch({
+                  path: 'vaptm/v1/upload-media',
+                  method: 'POST',
+                  body: formData
+                }).then(res => {
+                  setFormValues({ ...formValues, wireframeUrl: res.url });
+                  setModalSaveStatus({ message: __('Image Uploaded', 'vapt-builder'), type: 'success' });
+                }).catch(err => {
+                  setModalSaveStatus({ message: __('Paste failed', 'vapt-builder'), type: 'error' });
+                });
+              }
+            }
+          }
+        }, [
+          el('div', { style: { flexGrow: 1, paddingBottom: '10px' } }, [
+            el('p', { style: { fontWeight: '600', marginBottom: '10px' } }, sprintf(__('Moving "%s" to %s.', 'vapt-builder'), transitioning.key, transitioning.nextStatus)),
+
+            el(TextControl, {
+              label: __('Change Note (Internal)', 'vapt-builder'),
+              value: formValues.note,
+              onChange: (val) => setFormValues({ ...formValues, note: val }),
+              autoFocus: true
+            }),
+
+            transitioning.nextStatus === 'Develop' && el('div', {
+              style: { marginTop: '10px', padding: '12px', background: '#f0f3f5', borderRadius: '4px', display: 'flex', flexDirection: 'column' }
+            }, [
+              el('h4', { style: { margin: '0 0 8px 0', fontSize: '14px' } }, __('Build Configuration', 'vapt-builder')),
+
+              // Reference Box (Read Only)
+              el('div', { style: { marginBottom: '10px' } }, [
+                el('label', { style: { display: 'block', fontWeight: 'bold', marginBottom: '3px', fontSize: '10px', textTransform: 'uppercase', color: '#666' } }, __('Base Remediation Logic', 'vapt-builder')),
+                el('div', {
+                  style: { padding: '8px', background: '#fff', border: '1px solid #ddd', borderRadius: '3px', fontSize: '11px', maxHeight: '100px', overflow: 'hidden', whiteSpace: 'pre-wrap' }
+                }, transitioning.remediation || __('No remediation defined.', 'vapt-builder'))
+              ]),
+
+              el(wp.components.TextareaControl, {
+                label: __('Additional Instructions', 'vapt-builder'),
+                value: formValues.devInstruct,
+                onChange: (val) => setFormValues({ ...formValues, devInstruct: val }),
+                rows: 8
+              }),
+
+              el('div', { style: { marginTop: '5px' } }, [
+                el(TextControl, {
+                  label: __('Wireframe URL', 'vapt-builder'),
+                  value: formValues.wireframeUrl,
+                  onChange: (val) => setFormValues({ ...formValues, wireframeUrl: val }),
+                  help: __('Paste link or IMAGE directly!', 'vapt-builder')
+                }),
+                el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [
+                  el(Button, {
+                    isSecondary: true, isSmall: true,
+                    onClick: () => {
+                      const frame = wp.media({ title: __('Select Wireframe', 'vapt-builder'), multiple: false, library: { type: 'image' } });
+                      frame.on('select', () => {
+                        const attachment = frame.state().get('selection').first().toJSON();
+                        setFormValues({ ...formValues, wireframeUrl: attachment.url });
+                      });
+                      frame.open();
+                    }
+                  }, __('Upload Image', 'vapt-builder')),
+                  formValues.wireframeUrl && formValues.wireframeUrl.match(/\.(jpeg|jpg|gif|png)$/) &&
+                  el('img', { src: formValues.wireframeUrl, style: { height: '24px', borderRadius: '3px', border: '1px solid #ddd' }, alt: 'Thumbnail' })
+                ])
+              ])
+            ])
+          ]),
+
+          el('div', { style: { borderTop: '1px solid #ddd', paddingTop: '15px', textAlign: 'right' } }, [
+            el(Button, { isSecondary: true, onClick: onCancel, style: { marginRight: '10px' } }, __('Cancel', 'vapt-builder')),
+            el(Button, { isPrimary: true, onClick: () => onConfirm(formValues) }, __('Confirm & Build', 'vapt-builder'))
+          ]),
+
+          modalSaveStatus && el(Notice, {
+            status: modalSaveStatus.type || 'info',
+            onRemove: () => setModalSaveStatus(null),
+            style: { marginTop: '10px' }
+          }, modalSaveStatus.message)
+        ])
+      ]);
+    };
+
     const LifecycleIndicator = ({ feature, onChange }) => {
-      const activeStep = feature.status === 'available' ? 'draft' :
-        (feature.status === 'in_progress' ? 'develop' :
-          (feature.status === 'implemented' ? 'release' : feature.status));
+      // Normalize to Title Case for UI display if needed, but DB is now migrated.
+      const activeStep = feature.status;
 
       const steps = [
-        { id: 'draft', label: __('Draft', 'vapt-builder') },
-        { id: 'develop', label: __('Develop', 'vapt-builder') },
-        { id: 'test', label: __('Test', 'vapt-builder') },
-        { id: 'release', label: __('Release', 'vapt-builder') }
+        { id: 'Draft', label: __('Draft', 'vapt-builder') },
+        { id: 'Develop', label: __('Develop', 'vapt-builder') },
+        { id: 'Test', label: __('Test', 'vapt-builder') },
+        { id: 'Release', label: __('Release', 'vapt-builder') }
       ];
 
       return el('div', { className: 'vaptm-lifecycle-radios', style: { display: 'flex', gap: '10px', fontSize: '12px', alignItems: 'center' } }, [
@@ -249,53 +564,59 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
             placeholder: __('Search by name or description...', 'vapt-builder')
           })),
 
-          // Category Dropdown with Checkboxes
+          // Category Dropdown with Checkboxes (Wrapped in BaseControl for alignment)
           el('div', { style: { flex: '0 0 auto' } }, [
-            el('label', { className: 'components-base-control__label', style: { display: 'block', marginBottom: '8px', textTransform: 'uppercase', fontSize: '11px', fontWeight: '500', color: '#1e1e1e' } }, __('Filter by Category', 'vapt-builder')),
-            el(Dropdown, {
-              renderToggle: ({ isOpen, onToggle }) => el(Button, {
-                isSecondary: true,
-                onClick: onToggle,
-                'aria-expanded': isOpen,
-                icon: 'filter',
-                style: { height: '30px', minHeight: '30px' } // Match SelectControl height
-              }, selectedCategories.length === 0 ? __('All Categories', 'vapt-builder') : sprintf(__('%d Selected', 'vapt-builder'), selectedCategories.length)),
-              renderContent: () => el('div', { style: { padding: '15px', minWidth: '250px', maxHeight: '300px', overflowY: 'auto' } }, [
-                // All Categories Option
-                el(CheckboxControl, {
-                  label: __('All Categories', 'vapt-builder'),
-                  checked: selectedCategories.length === 0,
-                  onChange: () => setSelectedCategories([])
-                }),
-                el('hr', { style: { margin: '10px 0' } }),
-                // Individual Categories
-                ...categories.map(cat => el(CheckboxControl, {
-                  key: cat,
-                  label: cat,
-                  checked: selectedCategories.includes(cat),
-                  onChange: (isChecked) => {
-                    if (isChecked) {
-                      setSelectedCategories([...selectedCategories, cat]);
-                    } else {
-                      setSelectedCategories(selectedCategories.filter(c => c !== cat));
+            el(BaseControl, {
+              label: __('Filter by Category', 'vapt-builder'),
+              id: 'vaptm-category-filter',
+              className: 'vaptm-category-control'
+            },
+              el(Dropdown, {
+                renderToggle: ({ isOpen, onToggle }) => el(Button, {
+                  isSecondary: true,
+                  onClick: onToggle,
+                  'aria-expanded': isOpen,
+                  icon: 'filter',
+                  style: { height: '30px', minHeight: '30px', width: '100%', justifyContent: 'space-between' } // Match SelectControl height
+                }, selectedCategories.length === 0 ? __('All Categories', 'vapt-builder') : sprintf(__('%d Selected', 'vapt-builder'), selectedCategories.length)),
+                renderContent: () => el('div', { style: { padding: '15px', minWidth: '250px', maxHeight: '300px', overflowY: 'auto' } }, [
+                  // All Categories Option
+                  el(CheckboxControl, {
+                    label: __('All Categories', 'vapt-builder'),
+                    checked: selectedCategories.length === 0,
+                    onChange: () => setSelectedCategories([])
+                  }),
+                  el('hr', { style: { margin: '10px 0' } }),
+                  // Individual Categories
+                  ...categories.map(cat => el(CheckboxControl, {
+                    key: cat,
+                    label: cat,
+                    checked: selectedCategories.includes(cat),
+                    onChange: (isChecked) => {
+                      if (isChecked) {
+                        setSelectedCategories([...selectedCategories, cat]);
+                      } else {
+                        setSelectedCategories(selectedCategories.filter(c => c !== cat));
+                      }
                     }
-                  }
-                }))
-              ])
-            })
+                  }))
+                ])
+              })
+            )
           ]),
 
-          el('div', { style: { flex: '1 1 150px' } }, el(SelectControl, {
-            label: __('Filter by Status', 'vapt-builder'),
-            value: filterStatus,
+          el('div', { style: { flex: '1 1 auto', background: '#f0f0f1', padding: '10px 15px', borderRadius: '6px', border: '1px solid #dcdcde' } }, el(wp.components.RadioControl, {
+            label: __('Filter by Lifecycle Status', 'vapt-builder'),
+            selected: filterStatus,
             options: [
-              { label: __('All Features', 'vapt-builder'), value: 'all' },
+              { label: __('All', 'vapt-builder'), value: 'all' },
               { label: __('Draft', 'vapt-builder'), value: 'draft' },
               { label: __('Develop', 'vapt-builder'), value: 'develop' },
               { label: __('Test', 'vapt-builder'), value: 'test' },
               { label: __('Release', 'vapt-builder'), value: 'release' },
             ],
-            onChange: setFilterStatus
+            onChange: setFilterStatus,
+            className: 'vaptm-status-radios'
           })),
           el('div', { style: { flex: '1 1 150px' } }, el(SelectControl, {
             label: __('Sort By', 'vapt-builder'),
@@ -315,59 +636,64 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
           el('th', { style: { width: '100px' } }, __('Category', 'vapt-builder')),
           el('th', null, __('Description', 'vapt-builder')),
           el('th', { style: { width: '380px' } }, __('Lifecycle Status', 'vapt-builder')),
-          el('th', { style: { width: '150px' } }, __('Assigned To', 'vapt-builder')),
           el('th', { style: { width: '150px' } }, __('Updated', 'vapt-builder')),
           el('th', { style: { width: '180px' } }, __('Include', 'vapt-builder')),
         ])),
-        el('tbody', null, processedFeatures.map((f) => el('tr', { key: f.key }, [
-          el('td', { style: { width: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, [
-            el('strong', null, f.label)
+        el('tbody', null, processedFeatures.map((f) => el(Fragment, { key: f.key }, [
+          el('tr', null, [
+            el('td', { style: { width: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, [
+              el('strong', null, f.label)
+            ]),
+            el('td', null, f.category),
+            el('td', null, f.description),
+            el('td', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, [
+              el(LifecycleIndicator, {
+                feature: f,
+                onChange: (newStatus) => setTransitioning({
+                  key: f.key,
+                  nextStatus: newStatus,
+                  note: '',
+                  remediation: f.remediation || '',
+                  devInstruct: ''
+                })
+              }),
+              el(Button, {
+                icon: 'backup',
+                isSmall: true,
+                isTertiary: true,
+                disabled: !f.has_history,
+                onClick: () => f.has_history && setHistoryFeature(f),
+                label: f.has_history ? __('View History', 'vapt-builder') : __('No History', 'vapt-builder'),
+                style: { marginLeft: '10px', opacity: f.has_history ? 1 : 0.4 }
+              })
+            ]),
+            el('td', null, f.implemented_at ? new Date(f.implemented_at).toLocaleString() : '-'),
+            el('td', { className: 'vaptm-support-cell' }, el('div', { style: { display: 'flex', flexDirection: 'column', gap: '0px' } }, [
+              el(ToggleControl, {
+                label: __('Test Method', 'vapt-builder'),
+                checked: f.include_test_method,
+                disabled: ['Draft', 'draft', 'available'].includes(f.status),
+                onChange: (val) => updateFeature(f.key, { include_test_method: val }),
+                style: { marginBottom: '0px' }
+              }),
+              el(ToggleControl, {
+                label: __('Verification Steps', 'vapt-builder'),
+                checked: f.include_verification,
+                disabled: ['Draft', 'draft', 'available'].includes(f.status),
+                onChange: (val) => updateFeature(f.key, { include_verification: val }),
+                style: { marginBottom: '0px' }
+              }),
+              !['Draft', 'draft', 'available'].includes(f.status) && el(Button, {
+                isSecondary: true, isSmall: true,
+                icon: 'external',
+                onClick: () => setDesignFeature(f),
+                style: { marginTop: '5px', width: '100%', justifyContent: 'center' }
+              }, __('Open Design Hub...', 'vapt-builder'))
+            ]))
           ]),
-          el('td', null, f.category),
-          el('td', null, f.description),
-          el('td', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, [
-            el(LifecycleIndicator, {
-              feature: f,
-              onChange: (newStatus) => setTransitioning({ key: f.key, nextStatus: newStatus, note: '' })
-            }),
-            el(Button, {
-              icon: 'backup',
-              isSmall: true,
-              isTertiary: true,
-              onClick: () => setHistoryFeature(f),
-              label: __('View History', 'vapt-builder'),
-              style: { marginLeft: 'auto' }
-            })
-          ]),
-          el('td', null, el(SelectControl, {
-            value: f.assigned_to,
-            options: [
-              { label: __('Unassigned', 'vapt-builder'), value: '' },
-              ...assignees.map(u => ({ label: u.name, value: u.id }))
-            ],
-            onChange: (val) => onAssign(f.key, val),
-            style: { marginBottom: 0 }
-          })),
-          el('td', null, f.implemented_at ? new Date(f.implemented_at).toLocaleString() : '-'),
-          el('td', { className: 'vaptm-support-cell' }, el('div', { style: { display: 'flex', flexDirection: 'column', gap: '0px' } }, [
-            el(ToggleControl, {
-              label: __('Test Method', 'vapt-builder'),
-              checked: f.include_test_method,
-              disabled: f.status === 'draft' || f.status === 'available',
-              onChange: (val) => updateFeature(f.key, { include_test_method: val }),
-              style: { marginBottom: '0px' }
-            }),
-            el(ToggleControl, {
-              label: __('Verification Steps', 'vapt-builder'),
-              checked: f.include_verification,
-              disabled: f.status === 'draft' || f.status === 'available',
-              onChange: (val) => updateFeature(f.key, { include_verification: val }),
-              style: { marginBottom: '0px' }
-            })
-          ])),
-        ])), // End Map(Tr)
-        ), // End Tbody
-      ]), // End Table (Children Array, El)
+          // Interface Preview removed from grid view per user request
+        ])))
+      ]),
 
       // History Modal (Sibling in PanelBody Array)
       historyFeature && el(HistoryModal, {
@@ -375,24 +701,16 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
         onClose: () => setHistoryFeature(null)
       }),
 
-      // Transition Note Modal (Sibling in PanelBody Array)
-      transitioning && el(Modal, {
-        title: __('Status Change Note', 'vapt-builder'),
-        onRequestClose: () => setTransitioning(null),
-        className: 'vaptm-transition-modal'
-      }, [
-        el('p', null, sprintf(__('Moving "%s" to %s. Add an optional note for the history log:', 'vapt-builder'), transitioning.key, transitioning.nextStatus)),
-        el(TextControl, {
-          label: __('Note', 'vapt-builder'),
-          value: transitioning.note,
-          onChange: (val) => setTransitioning({ ...transitioning, note: val }),
-          autoFocus: true
-        }),
-        el('div', { style: { marginTop: '20px', textAlign: 'right' } }, [
-          el(Button, { isSecondary: true, onClick: () => setTransitioning(null), style: { marginRight: '10px' } }, __('Cancel', 'vapt-builder')),
-          el(Button, { isPrimary: true, onClick: confirmTransition }, __('Confirm Status Change', 'vapt-builder'))
-        ])
-      ])
+      transitioning && el(TransitionNoteModal, {
+        transitioning: transitioning,
+        onConfirm: confirmTransition,
+        onCancel: () => setTransitioning(null)
+      }),
+
+      designFeature && el(DesignModal, {
+        feature: designFeature,
+        onClose: () => setDesignFeature(null)
+      })
     ]);
   };
 
@@ -400,7 +718,6 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
     const [features, setFeatures] = useState([]);
     const [domains, setDomains] = useState([]);
     const [dataFiles, setDataFiles] = useState([]);
-    const [assignees, setAssignees] = useState([]);
     const [selectedFile, setSelectedFile] = useState(() => localStorage.getItem('vaptm_selected_file') || 'features-with-test-methods.json');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -427,16 +744,13 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
         .catch(err => { console.error('VAPT Master: Domains fetch error:', err); return []; });
       const fetchDataFiles = apiFetch({ path: 'vaptm/v1/data-files' })
         .catch(err => { console.error('VAPT Master: Data files fetch error:', err); return []; });
-      const fetchAssignees = apiFetch({ path: 'vaptm/v1/assignees' })
-        .catch(err => { console.error('VAPT Master: Assignees fetch error:', err); return []; });
 
-      return Promise.all([fetchFeatures, fetchDomains, fetchDataFiles, fetchAssignees])
-        .then(([featureData, domainData, files, assigneeData]) => {
+      return Promise.all([fetchFeatures, fetchDomains, fetchDataFiles])
+        .then(([featureData, domainData, files]) => {
           const cleanedFiles = (files || []).map(f => ({ ...f, label: (f.label || f.filename).replace(/_/g, ' ') }));
           setFeatures(featureData || []);
           setDomains(domainData || []);
           setDataFiles(cleanedFiles);
-          setAssignees(assigneeData || []);
           setLoading(false);
         })
         .catch((err) => {
@@ -459,7 +773,7 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
       setFeatures(prev => prev.map(f => f.key === key ? { ...f, ...data } : f));
       setSaveStatus({ message: __('Saving...', 'vapt-builder'), type: 'info' });
 
-      apiFetch({
+      return apiFetch({
         path: 'vaptm/v1/features/update',
         method: 'POST',
         data: { key, ...data }
@@ -695,16 +1009,6 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
       ]);
     };
 
-    const onAssign = (key, userId) => {
-      apiFetch({
-        path: 'vaptm/v1/features/assign',
-        method: 'POST',
-        data: { key, user_id: userId }
-      }).then(() => {
-        setSaveStatus({ message: __('Feature assigned successfully.', 'vapt-builder'), type: 'success' });
-        fetchData();
-      });
-    };
 
     const LicenseTab = () => el(PanelBody, { title: __('License & Subscription Management', 'vapt-builder'), initialOpen: true }, [
       el(Placeholder, {
@@ -804,9 +1108,7 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
             },
             onUpload: uploadJSON,
             isManageModalOpen,
-            setIsManageModalOpen,
-            assignees,
-            onAssign
+            setIsManageModalOpen
           });
           case 'license': return el(LicenseTab);
           case 'domains': return el(DomainFeatures);

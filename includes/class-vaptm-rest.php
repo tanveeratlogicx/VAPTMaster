@@ -102,6 +102,12 @@ class VAPTM_REST
       'callback' => array($this, 'generate_build'),
       'permission_callback' => array($this, 'check_permission'),
     ));
+
+    register_rest_route('vaptm/v1', '/upload-media', array(
+      'methods'  => 'POST',
+      'callback' => array($this, 'upload_media'),
+      'permission_callback' => array($this, 'check_permission'),
+    ));
   }
 
   public function check_permission()
@@ -143,6 +149,15 @@ class VAPTM_REST
       );
     }
 
+    // Security/Scope Check
+    $scope = $request->get_param('scope');
+    $is_superadmin = current_user_can('manage_options'); // Simplified check based on permission_callback
+
+    // Batch fetch history counts to avoid N+1 queries
+    global $wpdb;
+    $history_table = $wpdb->prefix . 'vaptm_feature_history';
+    $history_counts = $wpdb->get_results("SELECT feature_key, COUNT(*) as count FROM $history_table GROUP BY feature_key", OBJECT_K);
+
     // Merge with status and meta
     foreach ($features as &$feature) {
       // Correct mapping: 'name' from JSON is the display label.
@@ -151,7 +166,7 @@ class VAPTM_REST
       $key = isset($feature['key']) ? $feature['key'] : sanitize_title($feature['label']);
       $feature['key'] = $key;
 
-      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'draft', 'implemented_at' => null, 'assigned_to' => null);
+      $st = isset($status_map[$key]) ? $status_map[$key] : array('status' => 'Draft', 'implemented_at' => null, 'assigned_to' => null);
 
       $feature['status'] = $st['status'];
       $feature['implemented_at'] = $st['implemented_at'];
@@ -161,10 +176,25 @@ class VAPTM_REST
       if ($meta) {
         $feature['include_test_method'] = (bool) $meta['include_test_method'];
         $feature['include_verification'] = (bool) $meta['include_verification'];
-      } else {
-        $feature['include_test_method'] = false;
-        $feature['include_verification'] = false;
+        $feature['is_enforced'] = (bool) $meta['is_enforced'];
+        $feature['wireframe_url'] = $meta['wireframe_url'];
+        $feature['generated_schema'] = $meta['generated_schema'] ? json_decode($meta['generated_schema']) : null;
+        $feature['implementation_data'] = $meta['implementation_data'] ? json_decode($meta['implementation_data']) : new stdClass();
       }
+
+      $feature['has_history'] = isset($history_counts[$key]) && $history_counts[$key]->count > 0;
+    }
+
+    // Filter for Client Scope
+    if ($scope === 'client') {
+      $features = array_values(array_filter($features, function ($f) use ($is_superadmin) {
+        // If Superadmin, return EVERYTHING (Drafts/Available are needed for 'Develop' tab)
+        if ($is_superadmin) {
+          return true;
+        }
+        // If Client/Standard User, return ONLY Release
+        return $f['status'] === 'Release';
+      }));
     }
 
     return new WP_REST_Response($features, 200);
@@ -200,19 +230,36 @@ class VAPTM_REST
     $include_test = $request->get_param('include_test_method');
     $include_verification = $request->get_param('include_verification');
     $is_enforced = $request->get_param('is_enforced');
+    $wireframe_url = $request->get_param('wireframe_url');
+    $generated_schema = $request->get_param('generated_schema');
+    $implementation_data = $request->get_param('implementation_data');
 
     if ($status) {
-      $note = $request->get_param('transition_note') ?: '';
+      $note = $request->get_param('history_note') ?: ($request->get_param('transition_note') ?: '');
       $result = VAPTM_Workflow::transition_feature($key, $status, $note);
       if (is_wp_error($result)) {
         return new WP_REST_Response($result, 400);
       }
     }
 
+    // DEBUG LOGGING
+    if ($generated_schema !== null) {
+      error_log('VAPTM UPDATE: Received generated_schema: ' . print_r($generated_schema, true));
+      error_log('VAPTM UPDATE: Type: ' . gettype($generated_schema));
+    }
+
     $meta_updates = array();
     if ($include_test !== null) $meta_updates['include_test_method'] = $include_test ? 1 : 0;
     if ($include_verification !== null) $meta_updates['include_verification'] = $include_verification ? 1 : 0;
     if ($is_enforced !== null) $meta_updates['is_enforced'] = $is_enforced ? 1 : 0;
+    if ($wireframe_url !== null) $meta_updates['wireframe_url'] = $wireframe_url;
+    if ($generated_schema !== null) {
+      // Robustly handle both Arrays and Objects (stdClass) from JSON body
+      $meta_updates['generated_schema'] = (is_array($generated_schema) || is_object($generated_schema))
+        ? json_encode($generated_schema)
+        : $generated_schema;
+    }
+    if ($implementation_data !== null) $meta_updates['implementation_data'] = is_array($implementation_data) ? json_encode($implementation_data) : $implementation_data;
 
     if (! empty($meta_updates)) {
       VAPTM_DB::update_feature_meta($key, $meta_updates);
@@ -408,11 +455,70 @@ class VAPTM_REST
     global $wpdb;
     $key = $request->get_param('key');
     $user_id = $request->get_param('user_id');
-
     $table_status = $wpdb->prefix . 'vaptm_feature_status';
     $wpdb->update($table_status, array('assigned_to' => $user_id ? $user_id : null), array('feature_key' => $key));
 
     return new WP_REST_Response(array('success' => true), 200);
+  }
+
+  /**
+   * Handle Media Upload (for Pasted Images / Wireframes)
+   */
+  public function upload_media($request)
+  {
+    if (empty($_FILES['file'])) {
+      return new WP_Error('no_file', 'No file uploaded', array('status' => 400));
+    }
+
+    require_once(ABSPATH . 'wp-admin/includes/file.php');
+    require_once(ABSPATH . 'wp-admin/includes/media.php');
+    require_once(ABSPATH . 'wp-admin/includes/image.php');
+
+    // Filter to change upload directory
+    $upload_dir_filter = function ($uploads) {
+      $subdir = '/vaptm-wireframes';
+      $uploads['subdir'] = $subdir;
+      $uploads['path']   = $uploads['basedir'] . $subdir;
+      $uploads['url']    = $uploads['baseurl'] . $subdir;
+
+      if (! file_exists($uploads['path'])) {
+        wp_mkdir_p($uploads['path']);
+      }
+      return $uploads;
+    };
+
+    add_filter('upload_dir', $upload_dir_filter);
+
+    $file = $_FILES['file'];
+    $upload_overrides = array('test_form' => false);
+
+    $movefile = wp_handle_upload($file, $upload_overrides);
+
+    remove_filter('upload_dir', $upload_dir_filter);
+
+    if ($movefile && ! isset($movefile['error'])) {
+      // Create an attachment for the Media Library
+      $filename = $movefile['file'];
+      $attachment = array(
+        'guid'           => $movefile['url'],
+        'post_mime_type' => $movefile['type'],
+        'post_title'     => preg_replace('/\.[^.]+$/', '', basename($filename)),
+        'post_content'   => '',
+        'post_status'    => 'inherit'
+      );
+
+      $attach_id = wp_insert_attachment($attachment, $filename);
+      $attach_data = wp_generate_attachment_metadata($attach_id, $filename);
+      wp_update_attachment_metadata($attach_id, $attach_data);
+
+      return new WP_REST_Response(array(
+        'success' => true,
+        'url'     => $movefile['url'],
+        'id'      => $attach_id
+      ), 200);
+    } else {
+      return new WP_Error('upload_error', $movefile['error'], array('status' => 500));
+    }
   }
 }
 

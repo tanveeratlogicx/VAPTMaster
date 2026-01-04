@@ -2,6 +2,21 @@
 
 The **VAPT Master** plugin is now finalized with strict **Superadmin Access**, **Targeted Localhost Testing**, and corrected **JSON Mapping**.
 
+## Key Accomplishments (V1.1.6)
+
+### 🛠️ Admin Dashboard Polishing
+- **Horizontal Status Filters**: Forced a row-based layout for the status radio buttons, overcoming WordPress core flexbox overrides.
+- **Design Hub (The AI Bridge)**: Transformed the Design Modal into a split-view IDE.
+    - **Editor**: Left-side JSON editor with multiline support.
+    - **Live Preview**: Right-side real-time rendering of the generated interface.
+    - **AI Prompt Bridge**: Built-in button to copy context for Antigravity-AI.
+- **Performance**: Returned promises from API calls to ensure modal status tracking works flawlessly.
+
+### 📁 Client Dashboard Enhancements
+- **Title Corrected**: Restored the header to "VAPT Implementation Dashboard".
+- **Category Intelligence**: Refined filtering so "Develop" only shows active features, hiding 100+ "Draft" items to keep the sidebar clean.
+- **Navigation**: Defaulted to "All Categories" for a bird's-eye view of active work.
+
 ## Major Milestone Updates
 
 ### 1. Strict Superadmin & OTP Access Logic

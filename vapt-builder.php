@@ -13,7 +13,7 @@ if (! defined('ABSPATH')) {
 }
 
 // Plugin Constants
-define('VAPTM_VERSION', '1.1.2');
+define('VAPTM_VERSION', '1.2.5');
 define('VAPTM_PATH', plugin_dir_path(__FILE__));
 define('VAPTM_URL', plugin_dir_url(__FILE__));
 define('VAPTM_SUPERADMIN_EMAIL', 'tanmalik786@gmail.com');
@@ -67,7 +67,7 @@ function vaptm_activate_plugin()
   // Feature Status Table
   $table_status = "CREATE TABLE {$wpdb->prefix}vaptm_feature_status (
         feature_key VARCHAR(100) NOT NULL,
-        status ENUM('draft', 'develop', 'test', 'release') DEFAULT 'draft',
+        status ENUM('Draft', 'Develop', 'Test', 'Release') DEFAULT 'Draft',
         implemented_at DATETIME DEFAULT NULL,
         assigned_to BIGINT(20) UNSIGNED DEFAULT NULL,
         PRIMARY KEY  (feature_key)
@@ -82,6 +82,9 @@ function vaptm_activate_plugin()
         include_test_method TINYINT(1) DEFAULT 0,
         include_verification TINYINT(1) DEFAULT 0,
         is_enforced TINYINT(1) DEFAULT 0,
+        wireframe_url TEXT DEFAULT NULL,
+        generated_schema LONGTEXT DEFAULT NULL,
+        implementation_data LONGTEXT DEFAULT NULL,
         PRIMARY KEY  (feature_key)
     ) $charset_collate;";
 
@@ -149,9 +152,24 @@ function vaptm_manual_db_fix()
       $wpdb->query("ALTER TABLE $table ADD COLUMN manual_expiry_date DATETIME DEFAULT NULL");
     }
 
-    // 3. Force Modify Status Enum to new lifecycle
-    $table_status = $wpdb->prefix . 'vaptm_feature_status';
-    $wpdb->query("ALTER TABLE $table_status MODIFY COLUMN status ENUM('draft', 'develop', 'test', 'release') DEFAULT 'draft'");
+    // 3. Migrate Status ENUM to Title Case
+    $status_table = $wpdb->prefix . 'vaptm_feature_status';
+    $wpdb->query("ALTER TABLE $status_table MODIFY COLUMN status ENUM('Draft', 'Develop', 'Test', 'Release') DEFAULT 'Draft'");
+
+    // 4. Update existing lowercase statuses to Title Case
+    $wpdb->query("UPDATE $status_table SET status = 'Draft' WHERE status IN ('draft', 'available')");
+    $wpdb->query("UPDATE $status_table SET status = 'Develop' WHERE status IN ('develop', 'in_progress')");
+    $wpdb->query("UPDATE $status_table SET status = 'Test' WHERE status = 'test'");
+    $wpdb->query("UPDATE $status_table SET status = 'Release' WHERE status IN ('release', 'implemented')");
+
+    // 5. Ensure wireframe_url column exists
+    $meta_table = $wpdb->prefix . 'vaptm_feature_meta';
+    $meta_col = $wpdb->get_results("SHOW COLUMNS FROM $meta_table LIKE 'wireframe_url'");
+    if (empty($meta_col)) {
+      $wpdb->query("ALTER TABLE $meta_table ADD COLUMN wireframe_url TEXT DEFAULT NULL");
+    }
+
+    echo '<div class="notice notice-success"><p>Database migration complete. Statuses normalized to Draft, Develop, Test, Release.</p></div>';
 
     // 4. Force add is_enforced column
     $table_meta = $wpdb->prefix . 'vaptm_feature_meta';
@@ -161,12 +179,24 @@ function vaptm_manual_db_fix()
     }
 
     // 5. Force add assigned_to column
-    $col_assigned = $wpdb->get_results("SHOW COLUMNS FROM $table_status LIKE 'assigned_to'");
+    $col_assigned = $wpdb->get_results("SHOW COLUMNS FROM $status_table LIKE 'assigned_to'");
     if (empty($col_assigned)) {
-      $wpdb->query("ALTER TABLE $table_status ADD COLUMN assigned_to BIGINT(20) UNSIGNED DEFAULT NULL");
+      $wpdb->query("ALTER TABLE $status_table ADD COLUMN assigned_to BIGINT(20) UNSIGNED DEFAULT NULL");
     }
 
-    $msg = "Database schema updated (History Table + assigned_to + is_enforced + Status Enum + Manual Expiry).";
+    // 3. Force add generated_schema column
+    $meta_table = $wpdb->prefix . 'vaptm_feature_meta';
+    $col_schema = $wpdb->get_results("SHOW COLUMNS FROM $meta_table LIKE 'generated_schema'");
+    if (empty($col_schema)) {
+      $wpdb->query("ALTER TABLE $meta_table ADD COLUMN generated_schema LONGTEXT DEFAULT NULL");
+    }
+
+    $col_data = $wpdb->get_results("SHOW COLUMNS FROM $meta_table LIKE 'implementation_data'");
+    if (empty($col_data)) {
+      $wpdb->query("ALTER TABLE $meta_table ADD COLUMN implementation_data LONGTEXT DEFAULT NULL");
+    }
+
+    $msg = "Database schema updated (History Table + assigned_to + is_enforced + Status Enum + Manual Expiry + Generated Schema + Implementation Data).";
 
     wp_die("<h1>VAPT Builder Database Updated</h1><p>Schema refresh run. $msg</p><p>Please go back to the dashboard.</p>");
   }
@@ -322,47 +352,15 @@ function vaptm_render_client_status_page()
 {
 ?>
   <div class="wrap">
-    <h1><?php _e('VAPT Builder - Security Status', 'vapt-builder'); ?></h1>
-    <?php if (defined('VAPTM_DOMAIN_LOCKED')) : ?>
-      <div class="notice notice-info">
-        <p><?php printf(__('This build is locked to domain: %s', 'vapt-builder'), '<strong>' . esc_html(VAPTM_DOMAIN_LOCKED) . '</strong>'); ?></p>
-        <p><?php printf(__('Build Version: %s', 'vapt-builder'), '<strong>' . esc_html(VAPTM_BUILD_VERSION) . '</strong>'); ?></p>
-      </div>
-    <?php endif; ?>
+    <h1 class="wp-heading-inline"><?php _e('VAPT Builder', 'vapt-builder'); ?></h1>
+    <hr class="wp-header-end">
 
-    <?php if (isset($_GET['vaptm_debug']) && current_user_can('manage_options')) : ?>
-      <div class="notice notice-warning">
-        <p><strong>Debug Info:</strong></p>
-        <p>Current User Login: <code><?php echo esc_html(wp_get_current_user()->user_login); ?></code></p>
-        <p>Current User Email: <code><?php echo esc_html(wp_get_current_user()->user_email); ?></code></p>
-        <p>Expected Superadmin: <code><?php echo esc_html(VAPTM_SUPERADMIN_USER); ?></code></p>
-        <p>Is Superadmin: <code><?php echo (strtolower(wp_get_current_user()->user_login) === strtolower(VAPTM_SUPERADMIN_USER) || strtolower(wp_get_current_user()->user_email) === strtolower(VAPTM_SUPERADMIN_EMAIL) || is_vaptm_localhost()) ? 'YES' : 'NO'; ?></code></p>
+    <div id="vaptm-client-root">
+      <div style="padding: 40px; text-align: center; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 4px;">
+        <span class="spinner is-active" style="float: none; margin: 0 auto;"></span>
+        <p><?php _e('Loading Implementation Workbench...', 'vapt-builder'); ?></p>
       </div>
-    <?php endif; ?>
-
-    <?php if (!defined('VAPTM_DOMAIN_LOCKED')) : ?>
-      <div class="notice notice-warning">
-        <p><?php _e('This is a development/unlocked build of VAPT Builder.', 'vapt-builder'); ?> (Localhost/Superadmin Bypass Active)</p>
-      </div>
-    <?php endif; ?>
-
-    <h3><?php _e('Active Security Modules', 'vapt-builder'); ?></h3>
-    <ul>
-      <?php
-      $all_constants = get_defined_constants(true);
-      $user_constants = isset($all_constants['user']) ? $all_constants['user'] : [];
-      $found = false;
-      foreach ($user_constants as $name => $value) {
-        if (strpos($name, 'VAPTM_FEATURE_') === 0 && $value === true) {
-          echo '<li><span class="dashicons dashicons-yes" style="color:green;"></span> ' . esc_html(str_replace('VAPTM_FEATURE_', '', $name)) . '</li>';
-          $found = true;
-        }
-      }
-      if (! $found) {
-        echo '<li>' . __('No specific features enabled for this build yet.', 'vapt-builder') . '</li>';
-      }
-      ?>
-    </ul>
+    </div>
   </div>
 <?php
 }
@@ -372,11 +370,22 @@ function vaptm_render_client_status_page()
  */
 function vaptm_render_admin_page()
 {
-  // Strict Permission Check
   vaptm_check_permissions();
+  vaptm_master_dashboard_page();
+}
 
+function vaptm_master_dashboard_page()
+{
   if (! VAPTM_Auth::is_authenticated()) {
-    // If not authenticated, send OTP if not already sent in this access
+    if (isset($_POST['vaptm_verify_otp'])) {
+      VAPTM_Auth::verify_otp();
+      // If verification successful, page will reload, so return for now
+      if (VAPTM_Auth::is_authenticated()) {
+        echo '<script>window.location.reload();</script>';
+        return;
+      }
+    }
+
     if (! get_transient('vaptm_otp_email_' . VAPTM_SUPERADMIN_USER)) {
       VAPTM_Auth::send_otp();
     }
@@ -386,44 +395,11 @@ function vaptm_render_admin_page()
 ?>
   <div id="vaptm-admin-root" class="wrap">
     <h1><?php _e('VAPT Domain Admin', 'vapt-builder'); ?></h1>
-    <div id="vaptm-loading-notice" class="notice notice-info">
-      <p><?php _e('Initializing Master Dashboard...', 'vapt-builder'); ?></p>
-      <ul style="margin: 5px 0 0 20px; font-size: 11px; opacity: 0.8;">
-        <li>Asset URL: <a href="<?php echo esc_url(VAPTM_URL . 'assets/js/admin.js?ver=' . VAPTM_VERSION); ?>" target="_blank"><?php _e('Click to test script accessibility', 'vapt-builder'); ?></a></li>
-        <li>WP Enqueue Status: <code><?php echo wp_script_is('vaptm-admin-js', 'enqueued') ? 'ENQUEUED' : 'NOT ENQUEUED'; ?></code></li>
-        <li>WP Dependencies: <code>element:<?php echo wp_script_is('wp-element', 'registered') ? 'YES' : 'NO'; ?></code>, <code>comp:<?php echo wp_script_is('wp-components', 'registered') ? 'YES' : 'NO'; ?></code></li>
-        <li>Current Hook: <code><?php echo esc_html(isset($GLOBALS['vaptm_current_hook']) ? $GLOBALS['vaptm_current_hook'] : 'unknown'); ?></code></li>
-      </ul>
-      <p id="vaptm-tag-check" style="font-size: 11px; margin-top: 5px;"></p>
-    </div>
-    <div id="vaptm-manual-mount" style="display:none; margin-top: 20px;">
-      <p>Still not loading? <button class="button button-primary" onclick="if(window.vaptmInit) window.vaptmInit(); else alert('Dashboard script not detected in memory. Check console for 404 or Blocked errors.');">Force Dashboard Start</button></p>
+    <div style="padding: 20px; text-align: center;">
+      <span class="spinner is-active" style="float: none; margin: 0 auto;"></span>
+      <p><?php _e('Loading VAPT Master...', 'vapt-builder'); ?></p>
     </div>
   </div>
-  <script>
-    (function() {
-      setTimeout(function() {
-        var root = document.getElementById('vaptm-admin-root');
-        var manual = document.getElementById('vaptm-manual-mount');
-        var tagCheck = document.getElementById('vaptm-tag-check');
-
-        // 1. Check if script tag is even in the DOM
-        var scriptTag = document.querySelector('script[src*="admin.js"]');
-        if (tagCheck) {
-          tagCheck.innerHTML = scriptTag ? '<span style="color:green;">✔ Script tag found in DOM</span>' : '<span style="color:red;">✘ Script tag MISSING from DOM</span>';
-        }
-
-        if (root && root.querySelector('.notice-info')) {
-          if (manual) manual.style.display = 'block';
-          if (!window.vaptmScriptLoaded) {
-            console.error('VAPT Builder: Script load verification FAILED.');
-            // Add a more visible error if the script handle is totally missing
-            root.innerHTML += '<div class="notice notice-error"><p><strong>Diagnostic:</strong> Main JS bundle failed to execute. ' + (scriptTag ? 'The tag exists, but the browser could not execute it (Syntax error or Blocked).' : 'WordPress failed to print the script tag (Likely a hook or dependency issue).') + '</p></div>';
-          }
-        }
-      }, 5000);
-    })();
-  </script>
 <?php
 }
 
@@ -432,40 +408,87 @@ function vaptm_render_admin_page()
  */
 add_action('admin_enqueue_scripts', 'vaptm_enqueue_admin_assets');
 
+/**
+ * Enqueue Assets for React App
+ */
 function vaptm_enqueue_admin_assets($hook)
 {
   global $vaptm_hooks;
   $GLOBALS['vaptm_current_hook'] = $hook;
 
-  // Relaxed hook check
-  $is_our_page = (isset($_GET['page']) && $_GET['page'] === 'vapt-domain-admin') || strpos($hook, 'vapt-domain-admin') !== false;
+  $screen = get_current_screen();
 
-  if (! $is_our_page) {
-    return;
-  }
+  // Calculate is_superadmin for use in both blocks
+  $current_user = wp_get_current_user();
+  $user_login = $current_user->user_login;
+  $user_email = $current_user->user_email;
 
-  // No auth check here - redundant as the page itself is protected
-  // and we want to ensure the script enqueues even if timing is tight.
+  // Re-deriving strict superadmin status
+  $is_superadmin = ($user_login === strtolower(VAPTM_SUPERADMIN_USER) || $user_email === strtolower(VAPTM_SUPERADMIN_EMAIL) || is_vaptm_localhost());
 
-  // We will use wp-element (React) - Restoring all dependencies
-  wp_enqueue_script('vaptm-admin-js', VAPTM_URL . 'assets/js/admin.js', array('wp-element', 'wp-components', 'wp-i18n', 'wp-api-fetch'), VAPTM_VERSION, true);
+  if (!$screen) return;
 
-  // Diagnostic: Log what we think the dependencies are
-  if (isset($_GET['vaptm_debug'])) {
-    error_log('VAPT Builder: Enqueuing admin.js with version ' . VAPTM_VERSION);
-  }
-
-  wp_localize_script('vaptm-admin-js', 'vaptmSettings', array(
-    'pluginVersion' => VAPTM_VERSION,
-    'root' => esc_url_raw(rest_url()),
-    'nonce' => wp_create_nonce('wp_rest')
-  ));
+  // Enqueue Shared Styles
   wp_enqueue_style('vaptm-admin-css', VAPTM_URL . 'assets/css/admin.css', array('wp-components'), VAPTM_VERSION);
 
-  // Localize data for React
-  wp_localize_script('vaptm-admin-js', 'vaptmData', array(
-    'apiUrl' => esc_url_raw(rest_url('vaptm/v1')),
-    'nonce'  => wp_create_nonce('wp_rest'),
-    'assetsUrl' => VAPTM_URL . 'assets/',
-  ));
+  // 1. Superadmin Dashboard (admin.js)
+  if ($screen->id === 'toplevel_page_vapt-domain-admin' || $screen->id === 'vapt-builder_page_vapt-domain-admin') {
+    // Enqueue Auto-Interface Generator (Module)
+    wp_enqueue_script(
+      'vaptm-interface-generator',
+      plugin_dir_url(__FILE__) . 'assets/js/modules/interface-generator.js',
+      array(), // No deps, but strictly before admin.js
+      VAPTM_VERSION,
+      true
+    );
+
+    // Enqueue Generated Interface UI Component
+    wp_enqueue_script(
+      'vaptm-generated-interface-ui',
+      plugin_dir_url(__FILE__) . 'assets/js/modules/generated-interface.js',
+      array('wp-element', 'wp-components'),
+      VAPTM_VERSION,
+      true
+    );
+
+    // Enqueue Admin Dashboard Script
+    wp_enqueue_script(
+      'vaptm-admin-js',
+      plugin_dir_url(__FILE__) . 'assets/js/admin.js',
+      array('wp-element', 'wp-components', 'wp-api-fetch', 'vaptm-interface-generator', 'vaptm-generated-interface-ui'),
+      '1.1.4',
+      true
+    );
+
+    wp_localize_script('vaptm-admin-js', 'vaptmSettings', array(
+      'root' => esc_url_raw(rest_url()),
+      'nonce' => wp_create_nonce('wp_rest'),
+      'pluginVersion' => VAPTM_VERSION
+    ));
+  }
+
+  // 2. Client Dashboard (client.js) - "VAPT Builder" page
+  if ($screen->id === 'toplevel_page_vapt-builder' || $screen->id === 'vapt-builder_page_vapt-builder') {
+
+    // Enqueue Generated Interface UI Component (Shared)
+    wp_enqueue_script(
+      'vaptm-generated-interface-ui',
+      plugin_dir_url(__FILE__) . 'assets/js/modules/generated-interface.js',
+      array('wp-element', 'wp-components'),
+      VAPTM_VERSION,
+      true
+    );
+
+    wp_enqueue_script('vaptm-client-js', VAPTM_URL . 'assets/js/client.js', array('wp-element', 'wp-components', 'wp-i18n', 'wp-api-fetch', 'vaptm-generated-interface-ui'), VAPTM_VERSION, true);
+
+    wp_localize_script('vaptm-client-js', 'vaptmSettings', array(
+      'root' => esc_url_raw(rest_url()),
+      'nonce' => wp_create_nonce('wp_rest'),
+      'isSuper' => $is_superadmin,
+      'pluginVersion' => VAPTM_VERSION // Version Info
+    ));
+
+    // Enqueue Styles
+    wp_enqueue_style('wp-components');
+  }
 }

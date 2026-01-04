@@ -78,3 +78,55 @@
   background: #f6f7f7;
   border-radius: 4px;
 }
+
+/* Final Robust Horizontal Status Filter Fix - Targeted Specificity */
+.vaptm-status-radios fieldset {
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.vaptm-status-radios .components-base-control__label,
+.vaptm-status-radios legend {
+  display: block !important;
+  font-weight: 700 !important;
+  margin-bottom: 12px !important;
+  font-size: 14px !important;
+  color: #1d2327 !important;
+}
+
+.vaptm-status-radios .components-base-control__field {
+  display: flex !important;
+  flex-direction: column !important;
+  /* Label on top */
+  align-items: flex-start !important;
+}
+
+/* Specific container for the radio options themselves */
+.vaptm-status-radios .components-radio-control,
+.vaptm-status-radios .components-base-control__field>div,
+.vaptm-status-radios .components-base-control__field>div>div,
+.vaptm-status-radios .css-qq8u2x,
+.vaptm-status-radios [class*="css-"] {
+  display: flex !important;
+  flex-direction: row !important;
+  /* Force row on EVERYTHING nested that holds options */
+  flex-wrap: wrap !important;
+  gap: 15px !important;
+  align-items: center !important;
+}
+
+/* Ensure the label itself (if checking generic divs) doesn't get messed up, though we target specific divs usually. 
+   React components usually wrap the options in a plain div or an emotion styled div.
+*/
+
+.vaptm-status-radios .components-radio-control__option {
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  white-space: nowrap !important;
+}
+
+.vaptm-status-radios input[type="radio"] {
+  margin: 0 5px 0 0 !important;
+}
