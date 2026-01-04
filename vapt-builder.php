@@ -13,7 +13,7 @@ if (! defined('ABSPATH')) {
 }
 
 // Plugin Constants
-define('VAPTM_VERSION', '1.2.6');
+define('VAPTM_VERSION', '1.2.9');
 define('VAPTM_PATH', plugin_dir_path(__FILE__));
 define('VAPTM_URL', plugin_dir_url(__FILE__));
 define('VAPTM_SUPERADMIN_EMAIL', 'tanmalik786@gmail.com');

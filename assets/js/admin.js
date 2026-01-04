@@ -196,6 +196,7 @@ console.log('VAPT Builder: Admin JS bundle loaded and executing...');
       const [schemaText, setSchemaText] = useState(defaultValue);
       const [parsedSchema, setParsedSchema] = useState(feature.generated_schema || { controls: [] });
       const [isSaving, setIsSaving] = useState(false);
+      const [saveStatus, setSaveStatus] = useState(null);
 
       // Handle real-time preview
       const onJsonChange = (val) => {
@@ -303,9 +304,23 @@ Please provide ONLY the JSON block.`;
         className: 'vaptm-design-modal',
         style: { width: '1000px', maxWidth: '98%' }
       }, [
-        el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', minHeight: '500px' } }, [
-          // Left Side: The Editor
-          el('div', { style: { display: 'flex', flexDirection: 'column', gap: '15px' } }, [
+        // Toast Notification (Fixed Overlay)
+        saveStatus && el('div', {
+          style: {
+            position: 'absolute', top: '20px', right: '50%', transform: 'translateX(50%)',
+            background: saveStatus.type === 'error' ? '#fde8e8' : '#def7ec',
+            color: saveStatus.type === 'error' ? '#9b1c1c' : '#03543f',
+            padding: '10px 20px', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+            zIndex: 100, fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px'
+          }
+        }, [
+          el(Icon, { icon: saveStatus.type === 'error' ? 'warning' : 'yes', size: 20 }),
+          saveStatus.message
+        ]),
+
+        el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', height: '65vh', overflow: 'hidden' } }, [
+          // Left Side: The Editor (Scrollable)
+          el('div', { style: { display: 'flex', flexDirection: 'column', gap: '15px', overflowY: 'auto', paddingRight: '10px' } }, [
             el('p', { style: { margin: 0, fontSize: '13px', color: '#666' } }, __('Paste the JSON schema generated via Antigravity (the AI Proxy) below.', 'vapt-builder')),
             el(wp.components.TextareaControl, {
               label: __('Interface JSON Schema', 'vapt-builder'),
@@ -318,8 +333,8 @@ Please provide ONLY the JSON block.`;
             el(Button, { isSecondary: true, onClick: copyContext, icon: 'clipboard', style: { alignSelf: 'flex-start' } }, __('Copy AI Design Prompt', 'vapt-builder'))
           ]),
 
-          // Right Side: Live Preview
-          el('div', { style: { background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' } }, [
+          // Right Side: Live Preview (Scrollable)
+          el('div', { style: { background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, [
             el('div', { style: { padding: '12px 20px', borderBottom: '1px solid #e5e7eb', background: '#fff', borderTopLeftRadius: '8px', borderTopRightRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' } }, [
               el(Icon, { icon: 'visibility', size: 16 }),
               el('strong', { style: { fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#4b5563' } }, __('Live Implementation Preview'))

@@ -25,20 +25,25 @@
   const ClientDashboard = () => {
     const [features, setFeatures] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [error, setError] = useState(null);
     const [activeStatus, setActiveStatus] = useState(isSuper ? 'Develop' : 'Release');
     const [activeCategory, setActiveCategory] = useState('all');
 
-    const fetchData = () => {
-      setLoading(true);
+    const fetchData = (refresh = false) => {
+      if (refresh) setIsRefreshing(true);
+      else setLoading(true);
+
       apiFetch({ path: 'vaptm/v1/features?scope=client' })
         .then(data => {
           setFeatures(data);
           setLoading(false);
+          setIsRefreshing(false);
         })
         .catch(err => {
           setError(err.message || 'Failed to load features');
           setLoading(false);
+          setIsRefreshing(false);
         });
     };
 
@@ -140,15 +145,18 @@
       // Top Navigation
       el('header', { style: { padding: '15px 30px', background: '#fff', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, [
         el('div', { style: { display: 'flex', alignItems: 'center', gap: '15px' } }, [
-          el('h2', { style: { margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827' } }, __('VAPT Implementation Dashboard'),
-            el('span', { style: { marginLeft: '10px', fontSize: '12px', background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '4px' } }, isSuper ? __('Superadmin') : __('Standard'))
-          ),
+          el('h2', { style: { margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'baseline', gap: '8px' } }, [
+            __('VAPT Implementation Dashboard'),
+            el('span', { style: { fontSize: '11px', color: '#9ca3af', fontWeight: '400' } }, `v${vaptmSettings.pluginVersion}`)
+          ]),
+          el('span', { style: { fontSize: '10px', background: '#dcfce7', color: '#166534', padding: '1px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, isSuper ? __('Superadmin') : __('Standard')),
           el(Button, {
             icon: 'update',
             isSmall: true,
             isSecondary: true,
-            onClick: fetchData,
-            disabled: loading,
+            onClick: () => fetchData(true),
+            disabled: loading || isRefreshing,
+            isBusy: isRefreshing,
             label: __('Refresh Data', 'vapt-builder')
           })
         ]),
